@@ -16,12 +16,11 @@ subprojects {
     project.buildDir = "${rootProject.buildDir}/${project.name}"
     project.evaluationDependsOn(':app')
 
-    // Force compileSdk 35 for all subprojects except :app (fixes agora_rtc_engine android-31)
-    // Skip :app because evaluationDependsOn already evaluated it
+    // Force compileSdk 35 for all subprojects except :app
     if (project.name != 'app') {
         afterEvaluate {
             if (project.hasProperty('android')) {
-                project.android.compileSdk = 36
+                project.android.compileSdk = 35
             }
         }
     }
@@ -34,9 +33,6 @@ subprojects {
             if (details.requested.group == 'androidx.lifecycle') {
                 details.useVersion "2.8.2"
             }
-
-            // ⚠️ REMOVE Kotlin forcing (AGP 9 handles this internally)
-            // ❌ DO NOT FORCE Kotlin version anymore
         }
     }
 }

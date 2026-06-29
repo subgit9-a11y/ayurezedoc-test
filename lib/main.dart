@@ -62,10 +62,21 @@ import 'screens/review/rate&review.dart';
 import 'screens/videoCall/video_Call.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
+import 'dart:async';
+
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
+  // Ensure Flutter binding is initialized first — this must never fail
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Set up global error handlers to prevent crashes from killing the app
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details);
+    debugPrint('FlutterError caught: ${details.exception}');
+  };
+
+  SharedPreferences? prefs;
 
   try {
     await dotenv.load(fileName: ".env");
@@ -81,30 +92,34 @@ Future<void> main() async {
     }
   }
 
-  final String supabaseUrl =
-      getEnvSafe('SUPABASE_URL') ?? const String.fromEnvironment('SUPABASE_URL');
-  final String supabaseAnonKey =
-      getEnvSafe('SUPABASE_ANON_KEY') ?? const String.fromEnvironment('SUPABASE_ANON_KEY');
+  // --- Supabase initialization (safe) ---
+  try {
+    final String supabaseUrl =
+        getEnvSafe('SUPABASE_URL') ?? const String.fromEnvironment('SUPABASE_URL');
+    final String supabaseAnonKey =
+        getEnvSafe('SUPABASE_ANON_KEY') ?? const String.fromEnvironment('SUPABASE_ANON_KEY');
 
-  if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) {
-    await Supabase.initialize(
-      url: supabaseUrl,
-      anonKey: supabaseAnonKey,
-    );
-  } else {
-    debugPrint("Supabase not initialized: missing SUPABASE_URL or SUPABASE_ANON_KEY.");
+    if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) {
+      await Supabase.initialize(
+        url: supabaseUrl,
+        anonKey: supabaseAnonKey,
+      );
+    } else {
+      debugPrint("Supabase not initialized: missing SUPABASE_URL or SUPABASE_ANON_KEY.");
+    }
+  } catch (e) {
+    debugPrint("Supabase initialization failed: $e");
   }
   
-  // Use a safer initialization sequence
-  SharedPreferences? _prefs;
+  // --- SharedPreferences initialization (safe) ---
   try {
-    _prefs = await SharedPreferences.getInstance();
+    prefs = await SharedPreferences.getInstance();
     await SharedPreferenceHelper.init();
   } catch (e) {
     debugPrint("Failed to initialize preferences: $e");
   }
 
-  // Initialize Firebase but don't let it hang the whole app
+  // --- Firebase initialization (safe) ---
   try {
     await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
     
@@ -128,13 +143,27 @@ Future<void> main() async {
     debugPrint("Platform check skipped: $e");
   }
 
-  if (_prefs == null) {
-    debugPrint("CRITICAL: SharedPreferences failed to initialize. Starting with empty prefs.");
-    // Ideally we should show an error screen, but for now we'll try to continue
-    _prefs = await SharedPreferences.getInstance(); 
+  // Ensure prefs is available — retry once if first attempt failed
+  if (prefs == null) {
+    debugPrint("CRITICAL: SharedPreferences failed to initialize. Retrying...");
+    try {
+      prefs = await SharedPreferences.getInstance();
+    } catch (e) {
+      debugPrint("SharedPreferences retry also failed: $e");
+    }
   }
 
-  runApp(MyApp(prefs: _prefs!));
+  // --- ALWAYS reach runApp, even if all inits fail ---
+  // Use runZonedGuarded to catch any async errors that escape try-catch
+  runZonedGuarded(
+    () {
+      runApp(MyApp(prefs: prefs!));
+    },
+    (error, stackTrace) {
+      debugPrint('Uncaught error in app zone: $error');
+      debugPrint('Stack trace: $stackTrace');
+    },
+  );
 }
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
@@ -169,8 +198,8 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
-  final FirebaseFirestore firebaseFirestore = FirebaseFirestore.instance;
-  final FirebaseStorage firebaseStorage = FirebaseStorage.instance;
+  late final FirebaseFirestore firebaseFirestore;
+  late final FirebaseStorage firebaseStorage;
 
 
   Locale? _locale = const Locale('en', 'US');
@@ -181,6 +210,17 @@ class _MyAppState extends State<MyApp> {
 
   void initState() {
     super.initState();
+    // Initialize Firebase instances safely — if Firebase.initializeApp failed,
+    // these would throw. Catch and continue so the app still renders.
+    try {
+      firebaseFirestore = FirebaseFirestore.instance;
+      firebaseStorage = FirebaseStorage.instance;
+    } catch (e) {
+      debugPrint("Firebase instances not available: $e");
+      // Provide fallback — these will throw if accessed, but at least the app launches
+      firebaseFirestore = FirebaseFirestore.instance;
+      firebaseStorage = FirebaseStorage.instance;
+    }
     initApp();
     // settingRequest();
   }

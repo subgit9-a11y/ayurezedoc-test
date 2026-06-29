@@ -20,9 +20,7 @@ android {
     // Update namespace if needed to match your project
     namespace "com.ayureze.ayureze" 
 
-    
-    // In 2026, we use specific versions or follow the flutter object
-    compileSdk 36 
+    compileSdk 35
     ndkVersion flutter.ndkVersion
 
     compileOptions {
@@ -47,7 +45,7 @@ android {
 
         // Ensure minSdk is at least 21 for multidex/desugaring support
         minSdk 24 
-        targetSdk 36
+        targetSdk 35
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
         multiDexEnabled true
