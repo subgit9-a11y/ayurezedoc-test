@@ -120,8 +120,12 @@ Future<void> main() async {
     HttpOverrides.global = new MyHttpOverrides();
   }
   
-  if (Platform.isAndroid) {
-    SharedPreferenceHelper.setString(Preferences.device_platform, "Android");
+  try {
+    if (Platform.isAndroid) {
+      SharedPreferenceHelper.setString(Preferences.device_platform, "Android");
+    }
+  } catch (e) {
+    debugPrint("Platform check skipped: $e");
   }
 
   if (_prefs == null) {

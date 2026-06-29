@@ -17,7 +17,11 @@ class ServerError implements Exception {
     return _errorMessage;
   }
 
-  _handleError(DioException error) {
+  _handleError(dynamic error) {
+    if (error is! DioException) {
+      _errorMessage = error?.toString() ?? 'An unexpected error occurred';
+      return CommonFunction.toastMessage(_errorMessage);
+    }
     if (error.response?.statusCode == 401) {
       String msg = error.response?.data['msg']?.toString() ?? error.response?.data['message']?.toString() ?? "Unauthorized";
       if (msg.toLowerCase().contains("unauthorized")) {
@@ -35,8 +39,7 @@ class ServerError implements Exception {
         return CommonFunction.toastMessage('${error.response!.data['message'].toString()}');
       }
     } else if (error.type == DioExceptionType.unknown) {
-      // print(error.response!.data['msg'].toString());
-      return CommonFunction.toastMessage('${error.response!.data['msg'].toString()}');
+      return CommonFunction.toastMessage(error.response?.data?['msg']?.toString() ?? 'An unknown error occurred');
     } else if (error.type == DioExceptionType.cancel) {
       // print(error.response!.data['msg'].toString());
       return CommonFunction.toastMessage('Request was cancelled');
@@ -47,8 +50,7 @@ class ServerError implements Exception {
       // print(error.response!.data['msg'].toString());
       return CommonFunction.toastMessage('Connection timeout');
     } else if (error.type == DioExceptionType.badCertificate) {
-      // print(error.response!.data['msg'].toString());
-      return CommonFunction.toastMessage('${error.response!.data['msg']}');
+      return CommonFunction.toastMessage(error.response?.data?['msg']?.toString() ?? 'Bad certificate error');
     } else if (error.type == DioExceptionType.receiveTimeout) {
       // print(error.response!.data['msg'].toString());
       return CommonFunction.toastMessage('Receive timeout in connection');
