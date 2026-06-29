@@ -1,0 +1,1206 @@
+import 'dart:io';
+import 'package:path/path.dart' as p;
+import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:http_parser/http_parser.dart';
+import 'package:doctro/retrofit/apis.dart';
+import 'package:doctro/constant/prefConstatnt.dart';
+import 'package:doctro/constant/preferences.dart';
+
+/// Astra AI Healthcare API Service
+/// 
+/// This service connects the Doctor App to the Astra AI Backend
+/// Includes essential endpoints for:
+/// - Authentication
+/// - Patient Management
+/// - Prescriptions & Auto-Cart
+/// - AI Chat & Brain
+/// - Documents
+/// - Notifications
+class AstraApiService {
+  static final AstraApiService _instance = AstraApiService._internal();
+  late Dio _dio;
+
+  /// Your Astra AI Backend Base URL
+  final String baseUrl = Apis.astraBaseUrl;
+
+  factory AstraApiService() {
+    return _instance;
+  }
+
+  AstraApiService._internal() {
+    // Ensure baseUrl always ends with a slash to prevent construction errors
+    String sanitizedBaseUrl = baseUrl;
+    if (!sanitizedBaseUrl.endsWith('/')) {
+      sanitizedBaseUrl += '/';
+    }
+
+    _dio = Dio(BaseOptions(
+      baseUrl: sanitizedBaseUrl,
+      connectTimeout: const Duration(seconds: 45),
+      receiveTimeout: const Duration(seconds: 90),
+    ));
+
+    // Mobile network/TLS resilience for Astra endpoints
+    if (_dio.httpClientAdapter is IOHttpClientAdapter) {
+      final adapter = _dio.httpClientAdapter as IOHttpClientAdapter;
+      adapter.createHttpClient = () {
+        final client = HttpClient();
+        client.connectionTimeout = const Duration(seconds: 45);
+        client.badCertificateCallback = (cert, host, port) {
+          // Trust all certificates for Astra domain to bypass SSL/TLS handshake issues
+          return host.contains('astra.ayureze.in') || host.contains('82.25.105.156');
+        };
+        return client;
+      };
+    }
+
+
+    _dio.interceptors.add(InterceptorsWrapper(
+      onRequest: (options, handler) async {
+        // Prefer Firebase token when available
+        User? user = FirebaseAuth.instance.currentUser;
+        if (user != null) {
+          String? token = await user.getIdToken();
+          if (token != null) {
+            options.headers['Authorization'] = 'Bearer $token';
+          }
+        }
+
+        // Fallback to app auth token (doctor login token)
+        if (options.headers['Authorization'] == null) {
+          final String appToken = SharedPreferenceHelper.getString(Preferences.auth_token);
+          if (appToken.isNotEmpty && appToken != 'N_A') {
+            options.headers['Authorization'] = 'Bearer $appToken';
+          }
+        }
+        // Set default content type for JSON requests
+        if (options.headers['Content-Type'] == null) {
+          options.headers['Content-Type'] = 'application/json';
+        }
+        // Add role header for doctor-specific permissions
+        options.headers['X-Role'] = 'doctor';
+        return handler.next(options);
+      },
+      onError: (error, handler) async {
+        // Log errors for debugging
+        print('AstraAPI Error: ${error.message}');
+        print('Status Code: ${error.response?.statusCode}');
+        print('Response: ${error.response?.data}');
+        return handler.next(error);
+      },
+    ));
+  }
+
+  // ============================================================
+  // AUTHENTICATION ENDPOINTS
+  // ============================================================
+
+  /// Login with Firebase token
+  Future<Map<String, dynamic>> login() async {
+    try {
+      final response = await _dio.get(Apis.astra_login);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Create a session for the authenticated user
+  Future<Map<String, dynamic>> createSession(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post(Apis.astra_session, data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Get current user info
+  Future<Map<String, dynamic>> getUserInfo() async {
+    try {
+      final response = await _dio.get(Apis.astra_user_info);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Logout user
+  Future<void> logout() async {
+    try {
+      await _dio.post(Apis.astra_logout);
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  // ============================================================
+  // DOCTOR MANAGEMENT ENDPOINTS
+  // ============================================================
+
+  /// Register a new doctor
+  Future<Map<String, dynamic>> registerDoctor(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/api/doctors/register', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Get dynamic Agora RTC video token for consultations
+  Future<Map<String, dynamic>> getVideoToken({
+    required String channel,
+    String uid = "0",
+    String role = "publisher",
+    int expiry = 3600,
+  }) async {
+    try {
+      final path = 'api/v1/video/token?channel=$channel&uid=$uid&role=$role&expiry=$expiry';
+      final response = await _getWithDnsFallback(path);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Get doctor profile by ID
+  Future<Map<String, dynamic>> getDoctorProfile(String doctorId) async {
+    try {
+      final response = await _dio.get('/api/v1/api/doctors/$doctorId');
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Update doctor profile
+  Future<Map<String, dynamic>> updateDoctorProfile(String doctorId, Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.put('/api/v1/api/doctors/$doctorId', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Search nearby doctors
+  Future<List<dynamic>> searchNearbyDoctors({
+    required double latitude,
+    required double longitude,
+    double? radiusKm,
+    String? specialization,
+  }) async {
+    try {
+      final response = await _dio.get(
+        '/api/v1/api/doctors/nearby/search',
+        queryParameters: {
+          'latitude': latitude,
+          'longitude': longitude,
+          if (radiusKm != null) 'radius_km': radiusKm,
+          if (specialization != null) 'specialization': specialization,
+        },
+      );
+      return response.data ?? [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// Get doctor dashboard stats
+  Future<Map<String, dynamic>> getDashboardStats(String doctorId) async {
+    try {
+      final response = await _dio.get('/api/v1/api/doctors/$doctorId/dashboard-stats');
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Request withdrawal
+  Future<Map<String, dynamic>> requestWithdraw(String doctorId, Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/api/doctors/$doctorId/withdraw', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  // ============================================================
+  // PATIENT MANAGEMENT ENDPOINTS
+  // ============================================================
+
+  /// Register a new patient
+  Future<Map<String, dynamic>> registerPatient(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/patients/register', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Search patients by name, phone, or ID
+  Future<List<dynamic>> searchPatients(String searchTerm) async {
+    try {
+      final String path = Apis.astra_search_patients.replaceFirst('{search_term}', searchTerm);
+      final response = await _dio.get(path);
+      return response.data ?? [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// Verify patient by code
+  Future<Map<String, dynamic>> verifyPatientCode(String patientCode) async {
+    try {
+      final String path = Apis.astra_verify_patient.replaceFirst('{patient_code}', patientCode);
+      final response = await _dio.get(path);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Get patient profile
+  Future<Map<String, dynamic>> getPatientProfile(String patientId) async {
+    try {
+      final String path = Apis.astra_patient_profile.replaceFirst('{patient_id}', patientId);
+      final response = await _dio.get(path);
+      return response.data;
+    } catch (e) {
+      return {};
+    }
+  }
+
+  /// Create consultation record
+  Future<Map<String, dynamic>> createConsultation(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post(Apis.astra_create_consultation, data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  // ============================================================
+  // PRESCRIPTION ENDPOINTS
+  // ============================================================
+
+  /// Create a new prescription
+  Future<Map<String, dynamic>> createPrescription(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post(Apis.astra_create_prescription, data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Get prescription by ID
+  Future<Map<String, dynamic>> getPrescription(String prescriptionId) async {
+    try {
+      final String path = Apis.astra_get_prescription.replaceFirst('{prescription_id}', prescriptionId);
+      final response = await _dio.get(path);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Update prescription
+  Future<Map<String, dynamic>> updatePrescription(String prescriptionId, Map<String, dynamic> data) async {
+    try {
+      final String path = Apis.astra_update_prescription.replaceFirst('{prescription_id}', prescriptionId);
+      final response = await _dio.put(path, data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Get all prescriptions for a patient
+  Future<List<dynamic>> getPatientPrescriptions(String patientId) async {
+    try {
+      final String path = Apis.astra_patient_prescriptions.replaceFirst('{patient_id}', patientId);
+      final response = await _dio.get(path);
+      return response.data ?? [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// Process prescription (triggers automation)
+  Future<Map<String, dynamic>> processPrescription(String prescriptionId) async {
+    try {
+      final response = await _dio.post('/api/v1/api/prescriptions/$prescriptionId/process');
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Get prescription summary
+  Future<Map<String, dynamic>> getPrescriptionSummary(String prescriptionId) async {
+    try {
+      final response = await _dio.get('/api/v1/api/prescriptions/$prescriptionId/summary');
+      return response.data;
+    } catch (e) {
+      return {};
+    }
+  }
+
+  /// Get pending prescription queue
+  Future<List<dynamic>> getPendingPrescriptionQueue() async {
+    try {
+      final response = await _dio.get('/api/v1/api/prescriptions/queue/pending');
+      return response.data ?? [];
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  // ============================================================
+  // CATCHY PRESCRIPTIONS (AI-Generated Prescriptions)
+  // ============================================================
+
+  /// Generate catchy prescription from uploaded image
+  Future<Map<String, dynamic>> generateCatchyFromUpload(File imageFile) async {
+    try {
+      String fileName = p.basename(imageFile.path);
+      FormData formData = FormData.fromMap({
+        "file": await MultipartFile.fromFile(
+          imageFile.path,
+          filename: fileName,
+          contentType: MediaType('image', 'jpeg'),
+        ),
+      });
+
+      final response = await _dio.post(
+        '/api/v1/prescriptions/catchy-from-upload',
+        data: formData,
+        options: Options(headers: {"Content-Type": "multipart/form-data"}),
+      );
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Generate catchy prescription from data
+  Future<Map<String, dynamic>> generateCatchyFromData(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/prescriptions/catchy-from-data', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Auto-generate catchy prescription
+  Future<Map<String, dynamic>> autoGenerateCatchyPrescription(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/prescriptions/auto-generate-catchy', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  // ============================================================
+  // UNIFIED PRESCRIPTION WORKFLOW
+  // ============================================================
+
+  /// Execute unified prescription workflow (Save, PDF, WhatsApp, Cart, Reminders)
+  Future<Map<String, dynamic>> executePrescriptionWorkflow(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post(Apis.astra_execute_workflow, data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Check workflow status
+  Future<Map<String, dynamic>> checkWorkflowStatus(String prescriptionId) async {
+    try {
+      final String path = Apis.astra_workflow_status.replaceFirst('{prescription_id}', prescriptionId);
+      final response = await _dio.get(path);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  // ============================================================
+  // SMART AUTO-CART (Shopify Integration)
+  // ============================================================
+
+  /// Sync Shopify products (Force sync from Shopify to Astra DB)
+  Future<Map<String, dynamic>> syncShopifyProducts() async {
+    try {
+      final response = await _dio.post(Apis.astra_shopify_sync);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Check Shopify sync status
+  Future<Map<String, dynamic>> getShopifyStatus() async {
+    try {
+      final response = await _dio.get('/api/v1/shopify/status');
+      return response.data;
+    } catch (e) {
+      return {'error': e.toString(), 'connected': false};
+    }
+  }
+
+  /// Test Shopify connection
+  Future<Map<String, dynamic>> testShopifyConnection() async {
+    try {
+      final response = await _dio.get('/api/v1/shopify/test-connection');
+      return {'success': true, 'data': response.data};
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  /// AI Shop Assist - Smart medicine recommendations
+  Future<Map<String, dynamic>> aiShopAssist(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/shopify/ai-shop-assist', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Create prescription draft order
+  Future<Map<String, dynamic>> createDraftOrder(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/shopify/draft-order', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Search medicine products
+  Future<List<dynamic>> searchMedicineProducts(String medicineName) async {
+    try {
+      final response = await _dio.get('/api/v1/shopify/products/search/$medicineName');
+      return _extractProducts(response.data);
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// Get available medicines
+  Future<List<dynamic>> getAvailableMedicines() async {
+    try {
+      final response = await _dio.get('/api/v1/shopify/products/available');
+      final products = _extractProducts(response.data);
+      if (products.isNotEmpty) return products;
+
+      // Fallback 1: generic products endpoint
+      final fallbackResponse = await _dio.get('/api/v1/shopify/products');
+      final fallbackProducts = _extractProducts(fallbackResponse.data);
+      if (fallbackProducts.isNotEmpty) return fallbackProducts;
+
+      // Fallback 2: explicit all-products endpoint
+      final allResponse = await _dio.get('/api/v1/shopify/products/all');
+      return _extractProducts(allResponse.data);
+    } catch (e) {
+      try {
+        final allResponse = await _dio.get('/api/v1/shopify/products/all');
+        return _extractProducts(allResponse.data);
+      } catch (_) {
+        return [];
+      }
+    }
+  }
+
+  /// Get ALL Shopify products (for debugging)
+  Future<Map<String, dynamic>> getAllShopifyProducts() async {
+    try {
+      final response = await _dio.get('/api/v1/shopify/products/all');
+      List products = _extractProducts(response.data);
+      return {'success': true, 'products': products, 'count': products.length};
+    } catch (e) {
+      try {
+        final response = await _dio.get('/api/v1/shopify/products');
+        List products = _extractProducts(response.data);
+        return {'success': true, 'products': products, 'count': products.length};
+      } catch (e2) {
+        return {'success': false, 'error': e2.toString()};
+      }
+    }
+  }
+
+  /// Get Shopify store info
+  Future<Map<String, dynamic>> getShopifyStoreInfo() async {
+    try {
+      final response = await _dio.get('/api/v1/shopify/store-info');
+      return response.data;
+    } catch (e) {
+      return {'error': e.toString()};
+    }
+  }
+
+  /// Get draft order status
+  Future<Map<String, dynamic>> getDraftOrderStatus(String draftOrderId) async {
+    try {
+      final response = await _dio.get('/api/v1/shopify/draft-order/$draftOrderId');
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Validate prescription only (without creating order)
+  Future<Map<String, dynamic>> validatePrescription(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/shopify/validate-prescription', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  // ============================================================
+  // ASTRA BRAIN AI ENDPOINTS
+  // ============================================================
+
+  /// General AI Chat with Astra Brain
+  /// Supports session_id and history for memory
+  Future<Map<String, dynamic>> brainChat(Map<String, dynamic> data) async {
+    try {
+      // Ensure role is doctor
+      if (data['user_metadata'] == null) {
+        data['user_metadata'] = {'role': 'doctor'};
+      } else if (data['user_metadata'] is Map && data['user_metadata']['role'] == null) {
+        data['user_metadata']['role'] = 'doctor';
+      }
+      
+      final response = await _postWithDnsFallback(Apis.astra_brain_chat, data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// AI-powered doctor summary generation
+  Future<Map<String, dynamic>> generateDoctorSummary(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/brain/doctor-summary', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Analyze medication safety
+  Future<Map<String, dynamic>> analyzeSafety(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/brain/analyze-safety', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Extract medication schedule from text
+  Future<Map<String, dynamic>> extractSchedule(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/brain/extract-schedule', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Patient profile analysis
+  Future<Map<String, dynamic>> profileAnalysis(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/brain/profile-analysis', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Generate wellness recommendations
+  Future<Map<String, dynamic>> generateWellness(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/brain/generate-wellness', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Get order details
+  Future<Map<String, dynamic>> getOrderDetails(String draftOrderId) async {
+    try {
+      final response = await _dio.get('/api/v1/shopify/order-details/$draftOrderId');
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  // ============================================================
+  // ASTRA FILL (Voice & Text Processing)
+  // ============================================================
+
+  /// Process voice for prescription extraction
+  Future<Map<String, dynamic>> processVoice(File audioFile, String userId, {String languageCode = "en-IN"}) async {
+    try {
+      String fileName = p.basename(audioFile.path);
+      FormData formData = FormData.fromMap({
+        "audio": await MultipartFile.fromFile(
+          audioFile.path,
+          filename: fileName,
+          contentType: MediaType('audio', 'wav'),
+        ),
+        "user_id": userId,
+        "language_code": languageCode,
+      });
+
+      final response = await _dio.post(
+        '/api/v1/astra-fill/process-voice',
+        data: formData,
+        options: Options(headers: {"Content-Type": "multipart/form-data"}),
+      );
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Process text for prescription extraction
+  Future<Map<String, dynamic>> processText(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/astra-fill/process-text', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Confirm extraction data
+  Future<Map<String, dynamic>> confirmExtraction(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/astra-fill/confirm', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Get the latest Astra Fill record for a patient
+  Future<Map<String, dynamic>> getLatestAstraFill(String patientId) async {
+    try {
+      final response = await _dio.get('/api/v1/astra-fill/latest/$patientId');
+      return response.data ?? {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  // ============================================================
+  // DOCUMENT MANAGEMENT
+  // ============================================================
+
+  /// Upload a document (prescription image, lab report, etc.)
+  Future<Map<String, dynamic>> uploadDocument(File file, String patientId, String documentType) async {
+    try {
+      String fileName = p.basename(file.path);
+      String ext = p.extension(file.path).replaceFirst('.', '').toLowerCase();
+      String mimeType = ext == 'pdf' ? 'application/pdf' : 'image/$ext';
+      
+      FormData formData = FormData.fromMap({
+        "file": await MultipartFile.fromFile(
+          file.path,
+          filename: fileName,
+          contentType: MediaType.parse(mimeType),
+        ),
+        "patient_id": patientId,
+        "document_type": documentType,
+      });
+
+      final response = await _dio.post(
+        '/api/v1/documents/upload',
+        data: formData,
+        options: Options(headers: {"Content-Type": "multipart/form-data"}),
+      );
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// List patient documents
+  Future<List<dynamic>> listPatientDocuments(String patientId) async {
+    try {
+      final response = await _dio.get('/api/v1/documents/patient/$patientId');
+      return response.data ?? [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// Get document download URL
+  Future<String> getDocumentDownloadUrl(String documentId) async {
+    try {
+      final response = await _dio.get('/api/v1/documents/download/$documentId');
+      return response.data['url'] ?? '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  /// Generate shareable link for document
+  Future<String> generateShareLink(String documentId) async {
+    try {
+      final response = await _dio.get('/api/v1/documents/share-link/$documentId');
+      return response.data['share_link'] ?? '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  /// Share document via WhatsApp
+  Future<Map<String, dynamic>> shareDocumentViaWhatsApp(String documentId) async {
+    try {
+      final response = await _dio.post('/api/v1/documents/share-whatsapp/$documentId');
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Delete document
+  Future<void> deleteDocument(String documentId) async {
+    try {
+      await _dio.delete('/api/v1/documents/$documentId');
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  // ============================================================
+  // ORDER MANAGEMENT
+  // ============================================================
+
+  /// Save prescription record to orders
+  Future<Map<String, dynamic>> savePrescriptionRecord(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/orders/prescription/save', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Update order status
+  Future<Map<String, dynamic>> updateOrderStatus(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.patch('/api/v1/orders/prescription/status', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Get patient order history
+  Future<List<dynamic>> getPatientOrderHistory(String patientId) async {
+    try {
+      final response = await _dio.get('/api/v1/orders/patient/$patientId');
+      return response.data ?? [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// Get prescription details from orders
+  Future<Map<String, dynamic>> getOrderPrescriptionDetails(String prescriptionId) async {
+    try {
+      final response = await _dio.get('/api/v1/orders/prescription/$prescriptionId');
+      return response.data;
+    } catch (e) {
+      return {};
+    }
+  }
+
+  /// Get orders by status
+  Future<List<dynamic>> getOrdersByStatus(String status) async {
+    try {
+      final response = await _dio.get('/api/v1/orders/status/$status');
+      return response.data ?? [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // ============================================================
+  // PUSH NOTIFICATIONS
+  // ============================================================
+
+  /// Store FCM token for push notifications
+  Future<Map<String, dynamic>> storeFcmToken(String token, String userId) async {
+    try {
+      final response = await _dio.post('/api/v1/notifications/store-fcm-token', data: {
+        'token': token,
+        'user_id': userId,
+        'user_type': 'doctor',
+      });
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Remove FCM token
+  Future<void> removeFcmToken(String patientId) async {
+    try {
+      await _dio.delete('/api/v1/notifications/remove-fcm-token/$patientId');
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Get notification service status
+  Future<Map<String, dynamic>> getNotificationServiceStatus() async {
+    try {
+      final response = await _dio.get('/api/v1/notifications/service-status');
+      return response.data;
+    } catch (e) {
+      return {'status': 'unknown'};
+    }
+  }
+
+  // ============================================================
+  // MEDICINE REMINDERS
+  // ============================================================
+
+  /// Create reminders from prescription
+  Future<Map<String, dynamic>> createRemindersFromPrescription(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/medicine-reminders/create-from-prescription', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  // ============================================================
+  // TRANSLATION SERVICES
+  // ============================================================
+
+  /// Translate text
+  Future<Map<String, dynamic>> translateText(String text, String targetLanguage, {String? sourceLanguage}) async {
+    try {
+      final response = await _dio.post('/api/v1/api/translate/', data: {
+        'text': text,
+        'target_language': targetLanguage,
+        if (sourceLanguage != null) 'source_language': sourceLanguage,
+      });
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Get supported languages
+  Future<List<dynamic>> getSupportedLanguages() async {
+    try {
+      final response = await _dio.get('/api/v1/api/translate/languages');
+      return response.data ?? [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// Auto-translate (detect source language)
+  Future<Map<String, dynamic>> autoTranslate(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/api/translate/auto-translate', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  // ============================================================
+  // TREATMENT CENTERS
+  // ============================================================
+
+  /// Search nearby treatment centers
+  Future<List<dynamic>> searchNearbyTreatmentCenters({
+    required double latitude,
+    required double longitude,
+    double? radiusKm,
+    String? centerType,
+  }) async {
+    try {
+      final response = await _dio.get(
+        '/api/v1/api/treatment-centers/nearby/search',
+        queryParameters: {
+          'latitude': latitude,
+          'longitude': longitude,
+          if (radiusKm != null) 'radius_km': radiusKm,
+          if (centerType != null) 'center_type': centerType,
+        },
+      );
+      return response.data ?? [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // ============================================================
+  // AI AGENT
+  // ============================================================
+
+  /// Ask AI Agent a question
+  Future<Map<String, dynamic>> askAiAgent(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/api/ai-agent/ask', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  /// Get AI Agent status
+  Future<Map<String, dynamic>> getAiAgentStatus() async {
+    try {
+      final response = await _dio.get('/api/v1/api/ai-agent/status');
+      return response.data;
+    } catch (e) {
+      return {'status': 'offline'};
+    }
+  }
+
+  // ============================================================
+  // HEALTH CHECK ENDPOINTS
+  // ============================================================
+
+  /// Check API health
+  Future<bool> checkHealth() async {
+    try {
+      final response = await _dio.get('/health');
+      return response.statusCode == 200;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Check if API is ready
+  Future<bool> checkReady() async {
+    try {
+      final response = await _dio.get('/health/ready');
+      return response.statusCode == 200;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Check Astra Brain health
+  Future<Map<String, dynamic>> checkBrainHealth() async {
+    try {
+      final response = await _getWithDnsFallback('/api/v1/brain/health');
+      return response.data;
+    } catch (e) {
+      return {'status': 'offline'};
+    }
+  }
+
+  // ============================================================
+  // PRESCRIPTION PDF
+  // ============================================================
+
+  /// Send prescription PDF manually
+  Future<Map<String, dynamic>> sendPrescriptionPdf(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/v1/prescription-pdf/send', data: data);
+      return response.data;
+    } catch (e) {
+      throw _handleError(e);
+    }
+  }
+
+  // ============================================================
+  // HELPER METHODS
+  // ============================================================
+
+  /// Handle and format errors
+  Exception _handleError(dynamic error) {
+    if (error is DioException) {
+      String message = 'Network error occurred';
+      
+      if (error.response != null) {
+        final data = error.response?.data;
+        if (data is Map && data.containsKey('detail')) {
+          message = data['detail'].toString();
+        } else if (error.response?.statusCode == 401) {
+          message = 'Unauthorized. Please login again.';
+        } else if (error.response?.statusCode == 404) {
+          message = 'Resource not found.';
+        } else if (error.response?.statusCode == 500) {
+          message = 'Server error. Please try again later.';
+        }
+      } else if (error.type == DioExceptionType.connectionTimeout) {
+        message = 'Connection timeout. Please check your internet.';
+      } else if (error.type == DioExceptionType.receiveTimeout) {
+        message = 'Request timeout. Please try again.';
+      } else if (error.type == DioExceptionType.connectionError) {
+        message = 'Unable to reach Astra server. Check internet/VPN or try again in a moment.';
+      }
+      
+      return AstraApiException(message, error.response?.statusCode);
+    }
+    return Exception('An unexpected error occurred: $error');
+  }
+
+  /// Extract products list from various response structures
+  List<dynamic> _extractProducts(dynamic data) {
+    if (data == null) return [];
+    if (data is List) return data;
+    if (data is Map) {
+      final dynamic direct = data['products'] ??
+          data['recommendations'] ??
+          data['medicines'] ??
+          data['items'];
+      if (direct is List) return direct;
+
+      final dynamic nestedData = data['data'];
+      if (nestedData is List) return nestedData;
+      if (nestedData is Map) {
+        final dynamic nestedProducts = nestedData['products'] ??
+            nestedData['items'] ??
+            nestedData['medicines'];
+        if (nestedProducts is List) return nestedProducts;
+      }
+
+      return [];
+    }
+    return [];
+  }
+
+  bool _isConnectionLevelError(DioException error) {
+    if (error.type == DioExceptionType.connectionError ||
+        error.type == DioExceptionType.connectionTimeout ||
+        error.type == DioExceptionType.receiveTimeout) {
+      return true;
+    }
+    final String text = (error.message ?? '').toLowerCase();
+    return text.contains('socketexception') ||
+        text.contains('failed host lookup') ||
+        text.contains('network is unreachable') ||
+        text.contains('timed out');
+  }
+
+  Future<Response<dynamic>> _postWithDnsFallback(String path, {dynamic data}) async {
+    try {
+      return await _dio.post(path, data: data);
+    } on DioException catch (e) {
+      if (!_isConnectionLevelError(e)) rethrow;
+      return await _postViaIpv4(path, data: data);
+    }
+  }
+
+  Future<Response<dynamic>> _getWithDnsFallback(String path) async {
+    try {
+      return await _dio.get(path);
+    } on DioException catch (e) {
+      if (!_isConnectionLevelError(e)) rethrow;
+      return await _getViaIpv4(path);
+    }
+  }
+
+  Future<Response<dynamic>> _postViaIpv4(String path, {dynamic data}) async {
+    final dio = await _createIpv4Dio();
+    return dio.post(path, data: data);
+  }
+
+  Future<Response<dynamic>> _getViaIpv4(String path) async {
+    final dio = await _createIpv4Dio();
+    return dio.get(path);
+  }
+
+  Future<Dio> _createIpv4Dio() async {
+    final Uri uri = Uri.parse(baseUrl);
+    final String host = uri.host;
+    final List<InternetAddress> addresses =
+        await InternetAddress.lookup(host, type: InternetAddressType.IPv4);
+    if (addresses.isEmpty) {
+      throw Exception('No IPv4 address resolved for Astra server.');
+    }
+
+    final String ipBaseUrl = '${uri.scheme}://${addresses.first.address}';
+    final Dio fallbackDio = Dio(BaseOptions(
+      baseUrl: ipBaseUrl,
+      connectTimeout: const Duration(seconds: 45),
+      receiveTimeout: const Duration(seconds: 90),
+      headers: {
+        'Host': host,
+      },
+    ));
+
+    if (fallbackDio.httpClientAdapter is IOHttpClientAdapter) {
+      final adapter = fallbackDio.httpClientAdapter as IOHttpClientAdapter;
+      adapter.createHttpClient = () {
+        final client = HttpClient();
+        client.connectionTimeout = const Duration(seconds: 45);
+        client.badCertificateCallback = (cert, _, __) => true;
+        return client;
+      };
+    }
+
+    fallbackDio.interceptors.add(InterceptorsWrapper(
+      onRequest: (options, handler) async {
+        User? user = FirebaseAuth.instance.currentUser;
+        if (user != null) {
+          String? token = await user.getIdToken();
+          if (token != null) {
+            options.headers['Authorization'] = 'Bearer $token';
+          }
+        }
+
+        if (options.headers['Authorization'] == null) {
+          final String appToken =
+              SharedPreferenceHelper.getString(Preferences.auth_token);
+          if (appToken.isNotEmpty && appToken != 'N_A') {
+            options.headers['Authorization'] = 'Bearer $appToken';
+          }
+        }
+
+        options.headers['X-Role'] = 'doctor';
+        if (options.headers['Content-Type'] == null) {
+          options.headers['Content-Type'] = 'application/json';
+        }
+        options.headers['Host'] = host;
+        return handler.next(options);
+      },
+    ));
+
+    return fallbackDio;
+  }
+}
+
+/// Custom exception for Astra API errors
+class AstraApiException implements Exception {
+  final String message;
+  final int? statusCode;
+
+  AstraApiException(this.message, this.statusCode);
+
+  @override
+  String toString() => 'AstraApiException: $message (Status: $statusCode)';
+}

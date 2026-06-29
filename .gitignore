@@ -1,0 +1,40 @@
+# Miscellaneous
+.DS_Store
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub
+.pub-cache
+
+# IntelliJ
+.idea/
+
+# Visual Studio Code
+.vscode/
+
+# Android
+/android/app/src/main/assets/flutter_assets/
+/android/app/build/
+/android/build/
+/android/.gradle/
+/android/key.properties
+
+# iOS
+/ios/Pods/
+/ios/Runner/Assets.xcassets/
+/ios/Runner/GeneratedPluginRegistrant.h
+/ios/Runner/GeneratedPluginRegistrant.m
+/ios/Flutter/App.framework
+/ios/Flutter/engine.version
+
+# Build artifacts
+/build/
+
+# Dart
+.dart_tool/
+
+# Local scripts with secrets
+supabase_to_mysql_sync.py
+test_supabase.py
+
+# Environment variables (secrets)
+.env

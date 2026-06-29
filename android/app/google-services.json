@@ -1,0 +1,114 @@
+{
+  "project_info": {
+    "project_number": "298839588168",
+    "project_id": "ayurease-healthcare",
+    "storage_bucket": "ayurease-healthcare.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:298839588168:android:ae85ad77aedf34a5a1c77d",
+        "android_client_info": {
+          "package_name": "com.ayureze.ayureze"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "298839588168-cm1kuvtet540q1j85h88lhrip87rcm9a.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.ayureze.ayureze",
+            "certificate_hash": "15d84c3d9d1b53ddc1fd3fb6f95d709e2180d479"
+          }
+        },
+        {
+          "client_id": "298839588168-6ut75u7g4rqc8grmujtcl4m7obnq3oml.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDbeOvU5nkgLkYCc8CFMnlrK5duMQySKf0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "298839588168-6ut75u7g4rqc8grmujtcl4m7obnq3oml.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "298839588168-hushpnva1pukg3s4ffprl09ieth8rco3.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "app.ayureze.patient"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:298839588168:android:c2e4c7cfc00d90b1a1c77d",
+        "android_client_info": {
+          "package_name": "com.ayureze.patient"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "298839588168-h1iiiu1396ltg1oa8hq229hiuj5rf3n6.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.ayureze.patient",
+            "certificate_hash": "c28d62a832385248c89efabed65d3d6a3c01c66d"
+          }
+        },
+        {
+          "client_id": "298839588168-i8pa3a90gkk1kokl3qha56mbgjqj7s9r.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.ayureze.patient",
+            "certificate_hash": "fd37c080316fc811e801926d3883508663a7904b"
+          }
+        },
+        {
+          "client_id": "298839588168-p9dpju8e9sbujehtbj45lttvq9pl6ced.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.ayureze.patient",
+            "certificate_hash": "07baec71b82dfd7dca3c7c4433f0a1c4514eb895"
+          }
+        },
+        {
+          "client_id": "298839588168-6ut75u7g4rqc8grmujtcl4m7obnq3oml.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDbeOvU5nkgLkYCc8CFMnlrK5duMQySKf0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "298839588168-6ut75u7g4rqc8grmujtcl4m7obnq3oml.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "298839588168-hushpnva1pukg3s4ffprl09ieth8rco3.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "app.ayureze.patient"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
